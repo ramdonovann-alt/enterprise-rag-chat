@@ -1,5 +1,5 @@
 from _common import CRAWL_DIR, clean_text, read_jsonl, write_jsonl, call_ollama, extract_json_object, detect_language_rule, detect_category_rule, md5_id
-import re, json, time
+import re, json, time, os
 
 INPUT = f"{CRAWL_DIR}/clean_sections.jsonl"
 OUTPUT = f"{CRAWL_DIR}/chunks.jsonl"
@@ -62,7 +62,7 @@ def build_chunks(row, meta):
     for idx, chunk in enumerate(split_semantic(content), 1):
         text_for_embedding = f"Title: {title}\nHeading: {heading}\nTopic: {topic}\nCategory: {cat}\nService: {service}\nLanguage: {lang}\nKeywords: {', '.join(keywords)}\nURL: {url}\n\nContent:\n{chunk}"
         out.append({
-            "id": md5_id(url, heading, idx, chunk),
+            "id": md5_id(os.getenv("COMPANY_CODE", ""), url, heading, idx, chunk),  # ใส่ company_code กัน KB ต่างเว็บเดียวกันชนกัน
             "url": url, "title": title, "heading": heading,
             "heading_path": [x for x in [title, heading] if x],
             "category": cat, "service": service, "topic": topic, "page_type": page_type,

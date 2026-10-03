@@ -14,6 +14,7 @@ Switch by .env:
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -184,6 +185,49 @@ class OllamaProvider:
 
         data = self._post("/api/chat", payload)
         return data.get("message", {}).get("content", "")
+
+    def chat_stream(
+        self,
+        messages: Sequence[Dict[str, str]],
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ):
+        """Yield answer tokens from Ollama /api/chat with stream=True."""
+        payload: Dict[str, Any] = {
+            "model": model or self.config.chat_model,
+            "messages": list(messages),
+            "stream": True,
+        }
+        merged_options = dict(options or {})
+        if self.config.num_ctx and "num_ctx" not in merged_options:
+            merged_options["num_ctx"] = self.config.num_ctx
+        if merged_options:
+            payload["options"] = merged_options
+
+        url = f"{self.config.base_url}/api/chat"
+        with requests.post(
+            url,
+            headers=self._headers(),
+            json=payload,
+            timeout=self.config.timeout,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    continue
+                error = data.get("error")
+                if error:
+                    raise OllamaProviderError(str(error))
+                token = (data.get("message") or {}).get("content", "")
+                if token:
+                    yield token
+                if data.get("done"):
+                    break
 
     def generate(
         self,

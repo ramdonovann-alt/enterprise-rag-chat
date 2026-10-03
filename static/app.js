@@ -24,6 +24,12 @@ let selectedKb = '';
 const STORAGE_KEY = 'enterprise-rag-chat-history-v3';
 
 const KB_PROMPTS = {
+  demo: [
+    'ลาเต้ราคาเท่าไหร่',
+    'Café Siam มีกี่สาขา อยู่ที่ไหนบ้าง',
+    'ค่าจัดส่งเท่าไหร่ สั่งขั้นต่ำเท่าไหร่',
+    'ติดต่อร้านได้ยังไง',
+  ],
   locktonwattana: [
     'D&O ประกันอะไรบ้าง',
     'ถ้าธุรกิจหยุดชะงัก มีประกันช่วยได้ไหม',
@@ -50,6 +56,7 @@ function updatePromptChips(code) {
 
   const questions = KB_PROMPTS[code] || [];
   const label = Object.entries({
+    demo: 'Café Siam (ร้านตัวอย่าง)',
     locktonwattana: 'Lockton Wattana',
     deves: 'Deves Insurance',
     mgcars: 'MG Cars Thailand',
@@ -216,7 +223,10 @@ async function loadKb() {
     els.kbList.innerHTML = '';
     els.mobileKbList.innerHTML = '';
 
-    data.items.forEach(kb => {
+    // ซ่อน KB ที่ยังไม่มีข้อมูล (docs=0 และ faqs=0) กันหลงกดแล้วบอทตอบไม่ได้
+    const usableKbs = data.items.filter(kb => (kb.docs > 0 || kb.faqs > 0) || kb.code === selectedKb);
+
+    usableKbs.forEach(kb => {
       const isActive = kb.code === selectedKb;
 
       // Sidebar button
@@ -263,30 +273,130 @@ function updateKbBadge(label) {
   badge.textContent = label;
 }
 
+// ── Pipeline nodes: แสดงขั้นตอนการทำงานของระบบแบบกล่องต่อกัน ──
+const PIPELINE_NODES = [
+  { id: 'question', label: 'คำถาม',       sub: 'FastAPI' },
+  { id: 'intent',   label: 'จับใจความ',   sub: 'Python' },
+  { id: 'embed',    label: 'ฝังเวกเตอร์',  sub: 'Ollama bge-m3' },
+  { id: 'search',   label: 'ค้นหาข้อมูล',  sub: 'Supabase pgvector' },
+  { id: 'llm',      label: 'เขียนคำตอบ',   sub: 'Ollama qwen2.5:3b' },
+  { id: 'sources',  label: 'อ้างอิง',      sub: 'แหล่งที่มา' },
+];
+const PIPELINE_ORDER = ['question', 'intent', 'embed', 'search', 'llm', 'sources'];
+
+function renderPipeline() {
+  const bar = document.getElementById('pipelineBar');
+  if (!bar) return;
+  bar.innerHTML = PIPELINE_NODES.map((n, i) => `
+    <div class="pipe-node" id="node-${n.id}" data-step="${n.id}">
+      <span class="pipe-label">${n.label}</span>
+      <span class="pipe-sub">${n.sub}</span>
+    </div>${i < PIPELINE_NODES.length - 1 ? '<span class="pipe-arrow">→</span>' : ''}
+  `).join('');
+}
+
+function setPipelineState(activeStep) {
+  // activeStep = node ที่กำลังทำงาน, ก่อนหน้า = done, หลัง = idle
+  const idx = PIPELINE_ORDER.indexOf(activeStep);
+  PIPELINE_ORDER.forEach((id, i) => {
+    const el = document.getElementById(`node-${id}`);
+    if (!el) return;
+    el.classList.remove('done', 'active');
+    if (idx === -1) return;
+    if (i < idx) el.classList.add('done');
+    else if (i === idx) el.classList.add('active');
+  });
+}
+
+function resetPipeline() {
+  PIPELINE_ORDER.forEach(id => {
+    const el = document.getElementById(`node-${id}`);
+    if (el) el.classList.remove('done', 'active');
+  });
+}
+
+function finishPipeline() {
+  PIPELINE_ORDER.forEach(id => {
+    const el = document.getElementById(`node-${id}`);
+    if (el) { el.classList.remove('active'); el.classList.add('done'); }
+  });
+}
+
 async function sendMessage(message) {
   controller = new AbortController();
   els.sendBtn.disabled = true;
   els.stopBtn.disabled = false;
-  els.statusText.textContent = 'กำลังส่งคำถาม...';
   addMessage('user', message);
   const typing = addTyping();
+  resetPipeline();
+  setPipelineState('question');
+  els.statusText.textContent = 'เริ่มประมวลผลคำถาม...';
 
   try {
-    const res = await fetch('/chat', {
+    const res = await fetch('/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, company_code: selectedKb }),
       signal: controller.signal,
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || JSON.stringify(data) || res.statusText);
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || res.statusText);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let streamedText = '';
+    let bubbleStarted = false;
+    let finalAnswer = '';
+    let finalSources = [];
+
+    const handleEvent = (evt) => {
+      if (evt.type === 'status') {
+        els.statusText.textContent = evt.label || '';
+        setPipelineState(evt.step === 'nocontext' ? 'llm' : (evt.step === 'found' ? 'search' : evt.step));
+      } else if (evt.type === 'token') {
+        streamedText += evt.text || '';
+        if (!bubbleStarted) {
+          bubbleStarted = true;
+          typing.querySelector('.meta').innerHTML = `AI • ${nowText()}`;
+        }
+        const bubble = typing.querySelector('.bubble');
+        if (bubble) {
+          bubble.innerHTML = linkify(streamedText) + '<span class="stream-cursor">▍</span>';
+          els.messages.scrollTop = els.messages.scrollHeight;
+        }
+      } else if (evt.type === 'done') {
+        finalAnswer = evt.answer || streamedText;
+        finalSources = evt.sources || [];
+      } else if (evt.type === 'error') {
+        throw new Error(evt.detail || 'stream error');
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (line) handleEvent(JSON.parse(line));
+      }
+    }
+    if (buf.trim()) handleEvent(JSON.parse(buf.trim()));
+
     typing.remove();
-    addMessage('assistant', data.answer || '(ไม่มีคำตอบ)', true, data.sources || []);
+    addMessage('assistant', finalAnswer || streamedText || '(ไม่มีคำตอบ)', true, finalSources);
+    finishPipeline();
     els.statusText.textContent = 'ตอบเสร็จแล้ว';
   } catch (err) {
     typing.remove();
+    resetPipeline();
     addMessage('assistant', err.name === 'AbortError' ? 'หยุดการตอบแล้ว' : `เกิดข้อผิดพลาด: ${err.message}`);
-    els.statusText.textContent = 'เกิดข้อผิดพลาด';
+    els.statusText.textContent = err.name === 'AbortError' ? 'หยุดแล้ว' : 'เกิดข้อผิดพลาด';
   } finally {
     els.sendBtn.disabled = false;
     els.stopBtn.disabled = true;
@@ -337,6 +447,7 @@ els.copyLast.addEventListener('click', async () => {
   els.statusText.textContent = 'Copy คำตอบล่าสุดแล้ว';
 });
 
+renderPipeline();
 loadHistory();
 loadProvider();
 loadKb();

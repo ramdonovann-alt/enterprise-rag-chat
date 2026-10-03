@@ -43,6 +43,11 @@ def extract_sections(row):
     if current["content"]:
         content = "\n\n".join(current["content"])
         sections.append({"url":url,"title":title,"heading":current["heading"],"content":content,"language":detect_language_rule(content)})
+    # fallback: หน้าที่เขียนด้วย div ธรรมดา (ไม่มี p/h* ให้วน) — เก็บทั้งหน้าเป็น 1 หัวข้อ
+    if not sections:
+        whole = clean_text(root.get_text(" ", strip=True))
+        if len(whole) >= 50:
+            sections.append({"url":url,"title":title,"heading":title or "(main content)","content":whole,"language":detect_language_rule(whole)})
     return [s for s in sections if len(clean_text(s["content"])) >= 50]
 
 def main():

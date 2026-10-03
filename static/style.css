@@ -378,3 +378,72 @@ textarea {
     color: #e0f2fe;
   }
 }
+
+/* ── Pipeline nodes (แถบกล่องขั้นตอนการทำงาน) ── */
+.pipeline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+}
+.pipe-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148,163,184,0.25);
+  background: rgba(148,163,184,0.08);
+  min-width: 84px;
+  transition: border-color .25s, background .25s, box-shadow .25s;
+}
+.pipe-node .pipe-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+.pipe-node .pipe-sub {
+  font-size: 10px;
+  color: #64748b;
+  white-space: nowrap;
+}
+.pipe-arrow {
+  color: #475569;
+  font-size: 13px;
+}
+.pipe-node.active {
+  border-color: rgba(56,189,248,0.85);
+  background: rgba(56,189,248,0.16);
+  box-shadow: 0 0 12px rgba(56,189,248,0.45);
+  animation: pipePulse 1.2s ease-in-out infinite;
+}
+.pipe-node.active .pipe-label { color: #7dd3fc; }
+.pipe-node.done {
+  border-color: rgba(74,222,128,0.55);
+  background: rgba(74,222,128,0.10);
+}
+.pipe-node.done .pipe-label { color: #86efac; }
+.pipe-node.done::after {
+  content: "✓";
+  position: absolute;
+  margin: -18px 0 0 62px;
+  font-size: 10px;
+  color: #86efac;
+}
+@keyframes pipePulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(56,189,248,0.35); }
+  50% { box-shadow: 0 0 16px rgba(56,189,248,0.7); }
+}
+.stream-cursor {
+  display: inline-block;
+  color: #7dd3fc;
+  animation: cursorBlink 0.9s steps(1) infinite;
+}
+@keyframes cursorBlink { 50% { opacity: 0; } }
+@media (max-width: 900px) {
+  .pipeline { display: none; }
+}

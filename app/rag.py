@@ -503,35 +503,49 @@ def retrieve(
     query: str,
     provider: "OllamaProvider",
     company_code: str = "",
+    progress=None,
 ) -> tuple[str, list[dict], list[dict]]:
     """
     Run the full RAG pipeline.
     Returns (context_text, docs, faqs).
     company_code is resolved from arg → env var COMPANY_CODE → "" (no filter).
+    progress: optional callback(step, label) called at each pipeline node.
     """
+    def _emit(step: str, label: str) -> None:
+        if progress:
+            try:
+                progress(step, label)
+            except Exception:
+                pass
+
     resolved_code = company_code or os.getenv("COMPANY_CODE", "")
 
     # 1. Intent detection (rule-based by default; AI if ENABLE_AI_INTENT=true)
+    _emit("intent", "โหนดจับใจความ: วิเคราะห์ประเภทคำถาม")
     intent = _detect_intent(query, provider)
 
     # 2. Company facts / staff contacts — always active, no LLM call
     facts: list[dict] = []
     staff: list[dict] = []
     if intent in ("fact", "claim", "knowledge"):
+        _emit("facts", "โหนดข้อมูลบริษัท: ค้นหาข้อเท็จจริงของบริษัท")
         facts = _search_company_facts(query, resolved_code)
     if intent == "staff":
+        _emit("facts", "โหนดข้อมูลบริษัท: ค้นหาผู้ติดต่อ")
         staff = _search_staff_contacts(query, resolved_code)
 
     # 3. Query rewrite (optional, adds latency)
     search_query = _rewrite_query(query, provider)
 
     # 4. Embed
+    _emit("embed", f"โหนดฝังเวกเตอร์: Ollama ({provider.config.embed_model}) กำลังแปลงคำถาม")
     vec = _embed_query(search_query, provider)
     if not vec:
         context = _build_context([], [], facts, staff, [], [])
         return context, [], []
 
     # 5. Vector search
+    _emit("search", "โหนดค้นหาฐานความรู้: Supabase pgvector กำลังค้นแบบเวกเตอร์")
     docs = _search_documents(vec, resolved_code)
     faqs = _search_faq(vec, resolved_code)
 
@@ -542,6 +556,8 @@ def retrieve(
 
     # 7. Rerank docs (optional, adds latency)
     docs = _rerank_docs(query, docs + meta_docs, provider)
+
+    _emit("found", f"โหนดค้นหาฐานความรู้: พบเอกสาร {len(docs)} ชิ้น · FAQ {len(faqs)} รายการ")
 
     # 8. Build context
     context = _build_context(docs, faqs, facts, staff, knowledge, relationships)
